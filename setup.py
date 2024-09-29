@@ -22,11 +22,7 @@ setup(
     license='TODO: License declaration',
     entry_points={
         'console_scripts': [
-        'go_to_point = lidar_toolbox.go_to_point:main',
-        'follow_wall = lidar_toolbox.follow_wall:main',
-        'bug0 = lidar_toolbox.bug0:main',
-        'bug1 = lidar_toolbox.bug1:main',
-        'laser_scan_subscriber = lidar_toolbox.laser_scan_subscriber:main',
+            'proximity = lidar_toolbox.proximity:main',
         ],
     },
 )
