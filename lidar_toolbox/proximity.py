@@ -10,18 +10,20 @@ class LaserScanSubscriber(Node):
     def __init__(self):
         super().__init__('laser_scan_subscriber')
 
-        # Declare the distance_threshold parameter
-        self.declare_parameter('distance_threshold', 1.0)  # Default value: 1.0 meters
+        # Declare the threshold parameters
+        self.declare_parameter('radius', 0.2)  # Default value: 1.0 meters
         self.declare_parameter('angle_threshold', 10)  # Default value: 10 degree
 
-        self.distance_threshold = self.get_parameter('distance_threshold').get_parameter_value().double_value
+        self.radius = self.get_parameter('radius').get_parameter_value().double_value
         self.angle_threshold = self.get_parameter('angle_threshold').get_parameter_value().double_value
 
+        self.dt = 1 # time interval to calculate safe distance margin
+        self.safe_distance = 1 # initially set safe distance to 1m
 
         # Subscribe to the /scan topic
         self.subscription = self.create_subscription(
             LaserScan,
-            '/scan',
+            '/scan_transformed',
             self.listener_callback,
             10)
 
@@ -42,6 +44,9 @@ class LaserScanSubscriber(Node):
         self.linear_x = msg.linear.x
         self.linear_y = msg.linear.y
 
+        # safe distance is robot's radius + distance traveled in 1 sec
+        self.safe_distance = np.sqrt(self.linear_x**2 + self.linear_y**2) * self.dt + self.radius
+
         # Calculate theta in degrees based on the x and y components
         self.theta = np.degrees(np.arctan2(self.linear_y, self.linear_x))
         self.get_logger().info(f'Updated Theta based on Velocity: {self.theta:.2f} degrees')
@@ -55,13 +60,14 @@ class LaserScanSubscriber(Node):
         # Check if minimum distance is less than the threshold and publish the corresponding Boolean value
         halt_msg = Bool()
 
-        # Check if minimum distance is less than the threshold and call the service
-        if min_distance < self.distance_threshold:
-            halt_msg.data = True  # Publish True (halt the robot)
-            self.get_logger().info('Publishing: Halt = True (Robot Halted)')
-        else:
-            halt_msg.data = False  # Publish False (robot can move)
-            self.get_logger().info('Publishing: Halt = False (Robot Can Move)')
+        # Check if robot is moving, minimum distance is less than the threshold and publish halt
+        if self.linear_x or self.linear_y:
+            if min_distance < self.safe_distance:
+                halt_msg.data = True  # Publish True (halt the robot)
+                self.get_logger().info('Publishing: Halt = True (Robot Halted)')
+            else:
+                halt_msg.data = False  # Publish False (robot can move)
+                self.get_logger().info('Publishing: Halt = False (Robot Can Move)')
 
 
     def find_min_in_cone(self, scan_data, theta, threshold):
