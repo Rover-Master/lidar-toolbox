@@ -19,16 +19,39 @@ class ScanTransformer(Node):
         self.transformed_scan_publisher = self.create_publisher(LaserScan, '/scan_transformed', 10)
 
         # Translation parameter (20 cm in x-direction)
-        self.translation_x = -0.2  # 20 cm in meters
+        self.translation_x = 0.2  # 20 cm in meters
 
-        self.get_logger().info("Scan Transformer node has been started.")
+        # Obstacle filtering parameters (for robot arm)
+        self.angle_min_threshold = np.deg2rad(120)  # Lower angle bound (120°)
+        self.angle_max_threshold = np.deg2rad(240)  # Upper angle bound (240°)
+        self.range_threshold = 0.2  # 25 cm in meters
 
     def scan_callback(self, msg):
-        # Perform the transformation on the incoming scan data
+        # Perform obstacle filtering and then transform the scan data
+        
         transformed_scan = self.transform_scan(msg)
+        filtered_scan = self.filter_obstacles(transformed_scan)
 
         # Publish the transformed scan data to the /scan_transformed topic
-        self.transformed_scan_publisher.publish(transformed_scan)
+        self.transformed_scan_publisher.publish(filtered_scan)
+
+    def filter_obstacles(self, scan_msg):
+        """Filter out the points representing the robot's arm."""
+        num_points = len(scan_msg.ranges)
+        angles = np.arange(scan_msg.angle_min, scan_msg.angle_max, scan_msg.angle_increment)
+
+        for i in range(num_points-1):
+            angle = angles[i]
+            range_val = scan_msg.ranges[i]
+
+            # Check if the point is within the 180° ± 60° region and below the range threshold
+            if self.angle_min_threshold <= angle <= self.angle_max_threshold and range_val < self.range_threshold:
+                # Mark this range as invalid (obstacle detected on the robot's arm)
+                # self.get_logger().info(f"removed range: {scan_msg.ranges[i]} at angle: {angle}")
+                scan_msg.ranges[i] = float('inf')
+                
+
+        return scan_msg
 
     def transform_scan(self, scan_msg):
         # Create a copy of the incoming scan message for transformation
@@ -84,8 +107,8 @@ class ScanTransformer(Node):
                 ranges_transformed.append(float('inf'))  # Mark as invalid if out of bounds
 
         # Update the transformed scan message
-        transformed_scan.ranges = ranges_rotated.tolist() #ranges_transformed
-        transformed_scan.intensities = intensities_rotated.tolist()
+        transformed_scan.ranges = ranges_transformed  # Set transformed ranges
+        transformed_scan.intensities = intensities_rotated.tolist()  # Update intensities
 
         return transformed_scan
 

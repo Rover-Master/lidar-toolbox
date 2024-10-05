@@ -23,6 +23,7 @@ setup(
     entry_points={
         'console_scripts': [
             'proximity = lidar_toolbox.proximity:main',
+            'scan_transformer = lidar_toolbox.scan_transformer:main',
         ],
     },
 )
