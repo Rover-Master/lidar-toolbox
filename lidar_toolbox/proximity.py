@@ -59,8 +59,8 @@ class LaserScanSubscriber(Node):
         # self.get_logger().info('Received a scan')
         min_distance = self.find_min_in_cone(msg, self.heading, self.cone_width)
 
-        self.get_logger().info(f'Minimum distance in cone {self.heading-self.cone_width} to {self.heading+self.cone_width} degrees: {min_distance:.2f} meters')
-        self.get_logger().info(f'collission distance is {self.safe_distance} meters')
+        # self.get_logger().info(f'Minimum distance in cone {self.heading-self.cone_width} to {self.heading+self.cone_width} degrees: {min_distance:.2f} meters')
+        # self.get_logger().info(f'collission distance is {self.safe_distance} meters')
 
 
 
@@ -70,16 +70,15 @@ class LaserScanSubscriber(Node):
         if self.linear_x or self.linear_y:
             if min_distance < self.safe_distance:
                 halt_msg.data = True  # Publish True (halt the robot)
-                self.get_logger().info('Halt signal changed to True')
+                # self.get_logger().info('Halt signal changed to True')
             else:
                 halt_msg.data = False  # Publish False (robot can move)
-                self.get_logger().info('Halt signal changed to False')
-            # Publish the message
-        
+                # self.get_logger().info('Halt signal changed to False')
         else:
             halt_msg.data = False  # Publish False (robot can move)
-            self.get_logger().info(f'Zero velocity, halt status is {halt_msg.data}')
+            # self.get_logger().info(f'Zero velocity, halt status is {halt_msg.data}')
 
+        # Publish the message
         self.switch_publisher.publish(halt_msg)
 
 
