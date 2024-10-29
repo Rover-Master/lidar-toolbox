@@ -12,7 +12,7 @@ class LaserScanSubscriber(Node):
         super().__init__("laser_scan_subscriber")
 
         # Declare the threshold parameters
-        self.declare_parameter("radius", 0.255)  # Default value: 1.0 meters
+        self.declare_parameter("radius", 0.3)  # Default value: 1.0 meters
         self.declare_parameter("cone_width", 20.0)  # Default value: 2 degree
 
         self.radius = self.get_parameter("radius").get_parameter_value().double_value
