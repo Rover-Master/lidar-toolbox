@@ -29,10 +29,9 @@ class ScanTransformer(Node):
 
     def scan_callback(self, msg):
         # Perform obstacle filtering and then transform the scan data
-
         transformed_scan = self.transform_scan(msg)
         filtered_scan = self.filter_obstacles(transformed_scan)
-
+        filtered_scan.header.frame_id = "laser"
         # Publish the transformed scan data to the /scan_transformed topic
         self.transformed_scan_publisher.publish(filtered_scan)
 

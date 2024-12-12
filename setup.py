@@ -24,6 +24,7 @@ setup(
         'console_scripts': [
             'proximity = lidar_toolbox.proximity:main',
             'scan_transformer = lidar_toolbox.scan_transformer:main',
+            'scan_player = lidar_toolbox.scan_player:main',
         ],
     },
 )
