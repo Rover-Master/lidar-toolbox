@@ -5,7 +5,7 @@ from rclpy.publisher import Publisher
 from rclpy.executors import ShutdownException, ExternalShutdownException
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import Transform, TransformStamped
 from tf2_ros import (
     TransformBroadcaster,
     StaticTransformBroadcaster,
@@ -37,7 +37,30 @@ import time, os, json
 CWD = Path(os.getcwd())
 INITIAL_POSE_FILE = CWD / "INITIAL_POSE.conf"
 MAP_COMPLETE_FLAG = CWD / "MAP_COMPLETE.flag"
-TRJ_COMPLETE_FLAG = CWD / "TRJ_COMPLETE.flag"
+
+MAP_PGM = CWD / "map.pgm"
+TRJ_LST = CWD / "trj.list"
+
+
+def suffix(name: str, default: str = None):
+    segments = name.split(".")
+    return segments[-1] if len(segments) > 1 else default
+
+
+def parse_time(t: object):
+
+    from builtin_interfaces.msg import Time
+    from rclpy.time import Time as RclpyTime
+    from rclpy.duration import Duration
+
+    if isinstance(t, Time):
+        return int(t.sec) + int(t.nanosec) * 1e-9
+    elif isinstance(t, (RclpyTime, Duration)):
+        return t.nanoseconds * 1e-9
+    elif isinstance(t, float):
+        return t
+    else:
+        raise ValueError(f"Unknown time format: ({type(t)}) {t}")
 
 
 class Attitude:
@@ -83,30 +106,112 @@ class Attitude:
 
 
 class TransformSub(TransformListener):
-    def __init__(self, node: Node):
+    def __init__(self, node: "ScanPlayer"):
         super().__init__(buffer=TFBuffer(), node=node)
         self.node = node
         self.logger = node.get_logger()
+        self.output = TRJ_LST.open("wt")
+        self.output.write(
+            "# "
+            + ",".join(
+                map(lambda s: s.rjust(12), ("timestamp", "x", "y", "heading", "travel"))
+            )
+            + "\n"
+        )
 
-    prev_info = None
+    closed: bool = False
+
+    def close(self):
+        self.closed = True
+        self.output.close()
+
+    @staticmethod
+    def filter(transforms: list[TransformStamped], src: str, dst: str):
+        for t in transforms:
+            frame = t.header.frame_id, t.child_frame_id
+            if frame == (src, dst) and isinstance(t.transform, Transform):
+                ts = parse_time(t.header.stamp)
+                tf = (
+                    float(t.transform.translation.x),
+                    float(t.transform.translation.y),
+                    Attitude(t.transform.rotation).rz,
+                )
+                yield ts, tf
+
+    prev_ts: float | None = None
+    prev_tf: tuple[float, float, float] | None = None
+    prev_loc: tuple[float, float] | None = None
+
+    travel: float = 0.0
 
     def callback(self, data: TFMessage):
+        if self.closed:
+            return
         # Extract transform from "map" to "odom"
-        transform: TransformStamped
-        for transform in data.transforms:
-            if (
-                transform.child_frame_id == "odom"
-                and transform.header.frame_id == "map"
-            ):
-                x, y, r = (
-                    transform.transform.translation.x,
-                    transform.transform.translation.y,
-                    Attitude(transform.transform.rotation).rz,
+        for ts1, tf1 in self.filter(data.transforms, "map", "odom"):
+            if tf1 == self.prev_tf:
+                continue
+            ts0 = self.prev_ts
+            tf0 = self.prev_tf
+            self.prev_ts = ts1
+            self.prev_tf = tf1
+            x, y, r = tf1
+            # self.logger.info(
+            #     f"T(map->odom): x {x:.2f}, y {y:.2f}, r {degrees(r):.2f} deg | {r:.2f} rad"
+            # )
+            if ts0 is None or tf0 is None:
+                continue
+            if ts0 >= ts1:
+                self.node.get_logger().error("Newer TF has an earlier time stamp.")
+                continue
+            # Process all pending positions
+            pos = self.node.pending_pos
+            self.node.pending_pos = []
+            for ts, x, y, r in pos:
+                if ts < ts0:
+                    continue
+                if ts > ts1:
+                    self.node.pending_pos.append((ts, x, y, r))
+                    continue
+                k = (ts - ts0) / (ts1 - ts0)
+                t = 1.0 - k
+                tx, ty, tr = tuple((a * k + b * t for a, b in zip(tf0, tf1)))
+                s, c = sin(tr), cos(tr)
+                dx, dy = c * x - s * y, s * x + c * y
+                x1, y1, r = tx + dx, ty + dy, tr + r
+                if self.prev_loc is not None:
+                    x0, y0 = self.prev_loc
+                    delta = ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
+                    self.travel += delta
+                self.prev_loc = x1, y1
+                msg = ts, x1, y1, r, self.travel
+                self.output.write(
+                    "  " + ",".join(map(lambda x: f"{x:.8f}".rjust(12), msg)) + "\n"
                 )
-                info = f"T(map, odom): x {x:.2f}, y {y:.2f}, r {degrees(r):.2f} deg | {r:.2f} rad"
-                if self.prev_info != info:
-                    self.prev_info = info
-                    self.logger.info(info)
+                self.output.flush()
+
+
+from typing import Iterable
+import builtins
+
+
+class enumerate(builtins.enumerate):
+
+    def __new__(cls, obj, **kwargs):
+        if hasattr(obj, "__len__") and hasattr(obj, "__reversed__"):
+            return cls.reversible(obj, **kwargs)
+        else:
+            return builtins.enumerate(obj, **kwargs)
+
+    class reversible(builtins.enumerate):
+        def __init__(self, iterable: Iterable, start: int = 0):
+            self.iterable = iterable
+            self.start = start
+
+        def __reversed__(self):
+            indexes = range(len(self.iterable) - 1, self.start - 1, -1)
+            items = reversed(self.iterable)
+            return zip(indexes, items)
 
 
 class ScanPlayer(Node):
@@ -121,8 +226,6 @@ class ScanPlayer(Node):
             self.heading_offset = -self.param(node, "heading_offset", 0.0, float)
             self.odom_direction = -self.param(node, "odom_direction", 0.0, float)
             self.bag_path = Path(self.param(node, "bag_path", "", str)).absolute()
-            self.save_map = self.param(node, "save_map", False, bool)
-            self.save_trj = self.param(node, "save_trj", False, bool)
 
     class Pub:
         def __init__(self, node: Node):
@@ -144,6 +247,9 @@ class ScanPlayer(Node):
 
     def __init__(self):
         super().__init__("scan_player")
+
+        # (ts, x, y, r)
+        self.pending_pos = list[tuple[float, float, float, float]]()
 
         self.param = self.Param(self)
         self.pub = self.Pub(self)
@@ -175,7 +281,16 @@ class ScanPlayer(Node):
         while len(self.task_queue) >= self.task_queue.maxlen:
             # No timeout is specified because we need at least one task to be executed
             rclpy.spin_once(self)
-        self.task_queue.append((ddl, task))
+
+        # Insert the task into task queue in ascending order
+        # Searching from back because the new task is likely to be the last in queue
+        for idx, (ts, _) in reversed(enumerate(self.task_queue)):
+            if ts < ddl:
+                idx += 1
+                break
+        else:
+            idx = 0
+        self.task_queue.insert(idx, (ddl, task))
 
     clock: Publisher | None = None
     timer: Timer = None
@@ -303,6 +418,9 @@ class ScanPlayer(Node):
         pos.x = K * (cos(dr) * x - sin(dr) * y)
         pos.y = K * (sin(dr) * x + cos(dr) * y)
         pos.z = 0.0
+        # Append to pending positions for later processing
+        t = parse_time(msg.header.stamp)
+        self.pending_pos.append((t, pos.x, pos.y, r))
         # Create TransformStamped message
         transform = TransformStamped()
         transform.header.stamp = msg.header.stamp
@@ -335,27 +453,6 @@ class ScanPlayer(Node):
         return lambda: self.pub.scan.publish(msg)
 
 
-def suffix(name: str, default: str = None):
-    segments = name.split(".")
-    return segments[-1] if len(segments) > 1 else default
-
-
-def parse_time(t: object):
-
-    from builtin_interfaces.msg import Time
-    from rclpy.time import Time as RclpyTime
-    from rclpy.duration import Duration
-
-    if isinstance(t, Time):
-        return t.sec + t.nanosec * 1e-9
-    elif isinstance(t, (RclpyTime, Duration)):
-        return t.nanoseconds * 1e-9
-    elif isinstance(t, float):
-        return t
-    else:
-        raise ValueError(f"Unknown time format: ({type(t)}) {t}")
-
-
 def main():
     rclpy.init()
     node = ScanPlayer()
@@ -386,8 +483,7 @@ def main():
         except Exception as e:
             node.get_logger().error(f"Failed to read metadata: {e}")
         # Config node before running
-        if node.param.save_map:
-            node.flag_initial_pose = True
+        node.flag_initial_pose = True
         # Dump all messages
         while reader.has_next():
             topic, data, time_ns = reader.read_next()
@@ -404,19 +500,14 @@ def main():
                 case "sensor_msgs/msg/LaserScan":
                     node.schedule_task(t, node.laser_scan(msg))
             rclpy.spin_once(node, timeout_sec=1e-3)
-        # Bag has been drained, wait 1 second and call save_map service if needed
-        if node.param.save_map:
-            # It might take a while for slam_toolbox to process the remaining data
-            time.sleep(2.0)
-            MAP_COMPLETE_FLAG.unlink(missing_ok=True)
-            ret = node.save_map()
-            if ret:
-                MAP_COMPLETE_FLAG.touch()
-        if node.param.save_trj:
-            TRJ_COMPLETE_FLAG.unlink(missing_ok=True)
-            ret = False
-            if ret:
-                TRJ_COMPLETE_FLAG.touch()
+        # Bag has been drained, call save_map service after a delay
+        # It might take a while for slam_toolbox to process the remaining data
+        time.sleep(2.0)
+        MAP_COMPLETE_FLAG.unlink(missing_ok=True)
+        ret = node.save_map()
+        if ret:
+            MAP_COMPLETE_FLAG.touch()
+        node.sub.tf.close()
     except (KeyboardInterrupt, ShutdownException, ExternalShutdownException):
         pass
     finally:
