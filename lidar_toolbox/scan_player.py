@@ -368,30 +368,38 @@ class ScanPlayer(Node):
         result = True
         # Save map
         if self.srv.save_map.wait_for_service(timeout_sec=0):
-            request = SaveMap.Request()
-            request.name = String(data="map")
-            future = self.srv.save_map.call_async(request)
-            rclpy.spin_until_future_complete(self, future)
-            res: SaveMap.Response = future.result()
-            if res and res.result == SaveMap.Response.RESULT_SUCCESS:
-                self.get_logger().info("Map saved successfully")
+            for _ in range(3):
+                request = SaveMap.Request()
+                request.name = String(data="map")
+                future = self.srv.save_map.call_async(request)
+                rclpy.spin_until_future_complete(self, future)
+                res: SaveMap.Response = future.result()
+                if res and res.result == SaveMap.Response.RESULT_SUCCESS:
+                    self.get_logger().info("Map saved successfully")
+                    break
+                else:
+                    self.get_logger().error("Failed to save map")
+                    continue
             else:
-                self.get_logger().error("Failed to save map")
                 result = False
         else:
             self.get_logger().error("SaveMap service is not available")
             result = False
         # Serialize pose graph
         if self.srv.serialize.wait_for_service(timeout_sec=0):
-            request = SerializePoseGraph.Request()
-            request.filename = "map"
-            future = self.srv.serialize.call_async(request)
-            rclpy.spin_until_future_complete(self, future)
-            res: SerializePoseGraph.Response = future.result()
-            if res and res.result == SerializePoseGraph.Response.RESULT_SUCCESS:
-                self.get_logger().info("Map serialized successfully")
+            for _ in range(3):
+                request = SerializePoseGraph.Request()
+                request.filename = "map"
+                future = self.srv.serialize.call_async(request)
+                rclpy.spin_until_future_complete(self, future)
+                res: SerializePoseGraph.Response = future.result()
+                if res and res.result == SerializePoseGraph.Response.RESULT_SUCCESS:
+                    self.get_logger().info("Map serialized successfully")
+                    break
+                else:
+                    self.get_logger().error("Failed to serialize map, retrying ...")
+                    continue
             else:
-                self.get_logger().error("Failed to serialize map")
                 result = False
         else:
             self.get_logger().error("SerializePoseGraph service is not available")
